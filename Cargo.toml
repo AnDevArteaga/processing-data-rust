@@ -1,0 +1,25 @@
+# Raíz del workspace. No es un paquete: solo agrupa los crates de `members`
+# y centraliza las versiones de las dependencias.
+[workspace]
+members = ["crates/dp-core", "crates/dp-cli"]
+resolver = "3"
+
+# Metadatos que los crates heredan con `version.workspace = true`.
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+# Un único lugar donde fijar versiones. Así dos crates del workspace no pueden
+# terminar usando versiones distintas de la misma librería.
+[workspace.dependencies]
+csv = "1.4.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.20"
+
+# Perfil de release afinado para procesamiento intensivo.
+[profile.release]
+# Optimización entre unidades de compilación: más lento de compilar, binario
+# más rápido. Relevante porque el worker es CPU-bound.
+lto = true
+codegen-units = 1

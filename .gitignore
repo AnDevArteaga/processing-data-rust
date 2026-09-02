@@ -1,0 +1,6 @@
+/target
+
+# Archivos de prueba grandes: se regeneran, no se versionan
+data/clientes_grande.csv
+data/*_salida.csv
+data/*.json

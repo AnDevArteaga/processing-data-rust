@@ -1,0 +1,11 @@
+[package]
+name = "dp-core"
+version.workspace = true
+edition.workspace = true
+description = "Nucleo de procesamiento de datos: operaciones, sumideros y errores"
+
+[dependencies]
+csv.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

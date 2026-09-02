@@ -1,0 +1,15 @@
+[package]
+name = "dp-cli"
+version.workspace = true
+edition.workspace = true
+description = "Interfaz de linea de comandos del motor de procesamiento"
+
+# El paquete se llama dp-cli pero el ejecutable se llama dp.
+[[bin]]
+name = "dp"
+path = "src/main.rs"
+
+[dependencies]
+# Dependencia por ruta dentro del workspace: no pasa por crates.io.
+dp-core = { path = "../dp-core" }
+serde_json.workspace = true
