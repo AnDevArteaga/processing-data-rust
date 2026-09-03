@@ -1,0 +1,17 @@
+[package]
+name = "dp-dominio"
+version.workspace = true
+edition.workspace = true
+description = "Tipos del dominio y puertos. No depende de ninguna infraestructura."
+
+[dependencies]
+# La unica dependencia hacia otro crate nuestro. El dominio necesita el Resumen
+# y los errores clasificados que produce el motor, y nada mas.
+dp-core = { path = "../dp-core" }
+
+async-trait.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true

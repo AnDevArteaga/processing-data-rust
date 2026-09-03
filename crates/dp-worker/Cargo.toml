@@ -1,0 +1,19 @@
+[package]
+name = "dp-worker"
+version.workspace = true
+edition.workspace = true
+description = "Worker que reclama jobs de la cola y ejecuta el motor"
+
+[[bin]]
+name = "dp-worker"
+path = "src/main.rs"
+
+[dependencies]
+dp-core = { path = "../dp-core" }
+dp-dominio = { path = "../dp-dominio" }
+dp-memoria = { path = "../dp-memoria" }
+
+chrono.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

@@ -1,0 +1,15 @@
+[package]
+name = "dp-memoria"
+version.workspace = true
+edition.workspace = true
+description = "Implementaciones de los puertos en memoria y sobre el sistema de archivos"
+
+[dependencies]
+dp-dominio = { path = "../dp-dominio" }
+
+async-trait.workspace = true
+chrono.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+dp-core = { path = "../dp-core" }

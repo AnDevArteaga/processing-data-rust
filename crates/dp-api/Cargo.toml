@@ -1,0 +1,33 @@
+[package]
+name = "dp-api"
+version.workspace = true
+edition.workspace = true
+description = "Servidor HTTP de la API v1"
+
+# Librería y binario a la vez: el binario solo arranca, y la librería es lo que
+# los tests de integración pueden montar en memoria sin abrir un puerto.
+[lib]
+name = "dp_api"
+path = "src/lib.rs"
+
+[[bin]]
+name = "dp-api"
+path = "src/main.rs"
+
+[dependencies]
+dp-core = { path = "../dp-core" }
+dp-dominio = { path = "../dp-dominio" }
+dp-memoria = { path = "../dp-memoria" }
+
+axum.workspace = true
+chrono.workspace = true
+hex.workspace = true
+hmac.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

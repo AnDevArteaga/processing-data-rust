@@ -5,7 +5,7 @@
 //! (ver `fila.rs`), así que el esquema lo pone el archivo del cliente y no
 //! nuestro código.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum EstadoEmail {
@@ -32,7 +32,12 @@ impl EstadoEmail {
 }
 
 /// El resultado que la API devuelve al cliente (sección 4.5 del PDF).
-#[derive(Debug, Default, Serialize, PartialEq)]
+///
+/// `Copy` porque son siete enteros: copiarlo cuesta menos que pasar una
+/// referencia y evita tener que pensar en préstamos al guardarlo dentro de un
+/// `Job`. `Deserialize` porque en la fase 2 este resumen se guarda como JSON
+/// en PostgreSQL y hay que poder leerlo de vuelta.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Resumen {
     pub leidas: u64,
     pub escritas: u64,
