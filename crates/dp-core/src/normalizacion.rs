@@ -1,7 +1,7 @@
 // `crate::` en el `use` de abajo significa "desde la raíz de esta librería".
 // Las otras dos rutas posibles son `super::` (el módulo padre) y `self::`
 // (este mismo módulo).
-use crate::modelo::{ClienteBruto, ClienteLimpio, EstadoEmail, Resumen};
+use crate::modelo::EstadoEmail;
 
 pub fn normalizar_email(bruto: &str) -> String {
     bruto.trim().to_lowercase()
@@ -44,43 +44,10 @@ pub fn normalizar_telefono(bruto: &str) -> Option<String> {
     }
 }
 
-/// Transforma una fila cruda en una limpia y actualiza los contadores.
-pub fn procesar_fila(bruto: &ClienteBruto, r: &mut Resumen) -> ClienteLimpio {
-    let email = normalizar_email(&bruto.email);
-    if email != bruto.email {
-        r.campos_normalizados += 1;
-    }
-
-    let estado = validar_email(&email);
-    if estado != EstadoEmail::Valido {
-        r.emails_invalidos += 1;
-    }
-
-    let telefono = normalizar_telefono(&bruto.telefono);
-    match &telefono {
-        Some(numero) => {
-            if *numero != bruto.telefono {
-                r.campos_normalizados += 1;
-            }
-        }
-        None => {
-            if bruto.telefono.trim().is_empty() {
-                r.telefonos_vacios += 1;
-            } else {
-                r.telefonos_invalidos += 1;
-            }
-        }
-    }
-
-    ClienteLimpio {
-        nombre: bruto.nombre.trim().to_string(),
-        ciudad: bruto.ciudad.trim().to_string(),
-        email_estado: estado.etiqueta().to_string(),
-        telefono_valido: telefono.is_some(),
-        email,
-        telefono,
-    }
-}
+// `procesar_fila` vivía aquí y devolvía un `ClienteLimpio`. Se movió a
+// `limpieza.rs` como `Limpiador::limpiar`, que trabaja sobre columnas
+// arbitrarias en vez de sobre una struct fija de clientes. Este módulo se
+// queda con las funciones puras: entran datos, salen datos, no tocan nada.
 
 #[cfg(test)]
 mod tests {
@@ -172,24 +139,5 @@ mod tests {
         assert_eq!(normalizar_telefono("6012345678"), None);
     }
 
-    #[test]
-    fn procesar_fila_cuenta_las_normalizaciones() {
-        let bruto = ClienteBruto {
-            nombre: "  Juan Pérez  ".to_string(),
-            email: "  JUAN@Gmail.com ".to_string(),
-            telefono: "+57 300 123 4567".to_string(),
-            ciudad: " Bogotá ".to_string(),
-        };
-        let mut r = Resumen::default();
-        let limpio = procesar_fila(&bruto, &mut r);
-
-        assert_eq!(limpio.nombre, "Juan Pérez");
-        assert_eq!(limpio.email, "juan@gmail.com");
-        assert_eq!(limpio.telefono, Some("3001234567".to_string()));
-        assert_eq!(limpio.ciudad, "Bogotá");
-        assert!(limpio.telefono_valido);
-        // Se normalizaron el email y el teléfono: dos campos.
-        assert_eq!(r.campos_normalizados, 2);
-        assert_eq!(r.emails_invalidos, 0);
-    }
+    // El test de fila completa se mudó a `limpieza.rs`, junto con la lógica.
 }

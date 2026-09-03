@@ -1,12 +1,29 @@
+//! Adónde van las filas procesadas.
+//!
+//! El trait ya NO habla de clientes. Antes su firma era
+//! `escribir(&mut self, cliente: &ClienteLimpio)`, lo que obligaba a que toda
+//! operación futura produjera clientes: una operación de OCR sobre facturas no
+//! tenía dónde encajar. Ahora el contrato es "un encabezado y filas de
+//! valores", que es lo que cualquier operación tabular puede producir.
+//!
+//! El precio de esta generalidad es que perdemos el chequeo de campos en tiempo
+//! de compilación: todo es `String`. Es un intercambio deliberado, porque el
+//! esquema lo decide el CSV que sube el cliente y no lo podemos conocer al
+//! compilar. La validación se mueve a `Limpiador::nuevo`, que falla temprano
+//! con el nombre de la columna que falta.
+
 use crate::error::{ErrorDp, Resultado};
-use crate::modelo::ClienteLimpio;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 
-/// Adónde van las filas procesadas. La operación escribe sin saber si el
-/// destino es CSV, JSON o la basura.
 pub trait Sumidero {
-    fn escribir(&mut self, cliente: &ClienteLimpio) -> Resultado<()>;
+    /// Se llama una sola vez, antes de la primera fila.
+    fn encabezado(&mut self, columnas: &[String]) -> Resultado<()>;
+
+    /// Una fila. `valores` viene en el mismo orden que `columnas`.
+    fn escribir(&mut self, valores: &[String]) -> Resultado<()>;
+
+    /// Vaciar buffers y cerrar. Sin esto se pierden las últimas filas.
     fn cerrar(&mut self) -> Resultado<()>;
 }
 
@@ -16,15 +33,26 @@ pub struct SumideroCsv {
 
 impl SumideroCsv {
     pub fn nuevo(ruta: &str) -> Resultado<Self> {
+        // Abrimos el archivo a mano en vez de usar `Writer::from_path` para
+        // poder incluir la ruta en el mensaje de error.
+        let archivo = File::create(ruta).map_err(|origen| ErrorDp::NoPudeAbrir {
+            ruta: ruta.to_string(),
+            origen,
+        })?;
         Ok(SumideroCsv {
-            escritor: csv::Writer::from_path(ruta)?,
+            escritor: csv::Writer::from_writer(archivo),
         })
     }
 }
 
 impl Sumidero for SumideroCsv {
-    fn escribir(&mut self, cliente: &ClienteLimpio) -> Resultado<()> {
-        self.escritor.serialize(cliente)?;
+    fn encabezado(&mut self, columnas: &[String]) -> Resultado<()> {
+        self.escritor.write_record(columnas)?;
+        Ok(())
+    }
+
+    fn escribir(&mut self, valores: &[String]) -> Resultado<()> {
+        self.escritor.write_record(valores)?;
         Ok(())
     }
 
@@ -36,6 +64,7 @@ impl Sumidero for SumideroCsv {
 
 pub struct SumideroJson {
     salida: BufWriter<File>,
+    columnas: Vec<String>,
     primero: bool,
 }
 
@@ -49,25 +78,57 @@ impl SumideroJson {
         writeln!(salida, "[")?;
         Ok(SumideroJson {
             salida,
+            columnas: Vec::new(),
             primero: true,
         })
     }
 }
 
 impl Sumidero for SumideroJson {
-    fn escribir(&mut self, cliente: &ClienteLimpio) -> Resultado<()> {
-        let json = serde_json::to_string(cliente)?;
+    fn encabezado(&mut self, columnas: &[String]) -> Resultado<()> {
+        self.columnas = columnas.to_vec();
+        Ok(())
+    }
+
+    fn escribir(&mut self, valores: &[String]) -> Resultado<()> {
+        // Construimos el objeto a mano en vez de usar `serde_json::Map` porque
+        // Map es un BTreeMap: ordenaría las claves alfabéticamente y perderíamos
+        // el orden de columnas del archivo. `to_string` sobre cada texto se
+        // encarga del escapado (comillas, saltos de línea, acentos).
         if self.primero {
-            write!(self.salida, "  {json}")?;
+            write!(self.salida, "  {{")?;
             self.primero = false;
         } else {
-            write!(self.salida, ",\n  {json}")?;
+            write!(self.salida, ",\n  {{")?;
         }
+
+        for (posicion, valor) in valores.iter().enumerate() {
+            if posicion > 0 {
+                write!(self.salida, ",")?;
+            }
+            let nombre = self
+                .columnas
+                .get(posicion)
+                .map(String::as_str)
+                .unwrap_or("desconocida");
+            write!(
+                self.salida,
+                "{}:{}",
+                serde_json::to_string(nombre)?,
+                serde_json::to_string(valor)?
+            )?;
+        }
+
+        write!(self.salida, "}}")?;
         Ok(())
     }
 
     fn cerrar(&mut self) -> Resultado<()> {
-        writeln!(self.salida)?;
+        // Si no se escribió ninguna fila no hay que meter el salto de línea,
+        // o el JSON quedaría como "[\n\n]".
+        if !self.primero {
+            writeln!(self.salida)?;
+        }
         writeln!(self.salida, "]")?;
         self.salida.flush()?;
         Ok(())
@@ -78,7 +139,35 @@ impl Sumidero for SumideroJson {
 pub struct SumideroNulo;
 
 impl Sumidero for SumideroNulo {
-    fn escribir(&mut self, _cliente: &ClienteLimpio) -> Resultado<()> {
+    fn encabezado(&mut self, _columnas: &[String]) -> Resultado<()> {
+        Ok(())
+    }
+
+    fn escribir(&mut self, _valores: &[String]) -> Resultado<()> {
+        Ok(())
+    }
+
+    fn cerrar(&mut self) -> Resultado<()> {
+        Ok(())
+    }
+}
+
+/// Guarda las filas en memoria. Solo para tests: permite verificar lo que una
+/// operación produce sin tocar el disco.
+#[derive(Default)]
+pub struct SumideroMemoria {
+    pub columnas: Vec<String>,
+    pub filas: Vec<Vec<String>>,
+}
+
+impl Sumidero for SumideroMemoria {
+    fn encabezado(&mut self, columnas: &[String]) -> Resultado<()> {
+        self.columnas = columnas.to_vec();
+        Ok(())
+    }
+
+    fn escribir(&mut self, valores: &[String]) -> Resultado<()> {
+        self.filas.push(valores.to_vec());
         Ok(())
     }
 

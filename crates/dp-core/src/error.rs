@@ -27,6 +27,13 @@ pub enum ErrorDp {
 
     #[error("al archivo le falta la columna obligatoria '{0}'")]
     ColumnaFaltante(String),
+
+    /// Cortafuegos de memoria: la deduplicación exacta necesita recordar cada
+    /// clave única, así que sin un tope un archivo grande tumba el worker.
+    #[error(
+        "el archivo supera el limite de {limite} valores unicos en la clave de deduplicacion (iba en la fila {fila})"
+    )]
+    LimiteDeClaves { limite: usize, fila: u64 },
 }
 
 impl ErrorDp {
@@ -42,6 +49,7 @@ impl ErrorDp {
             ErrorDp::JsonInvalido(_) => "E_JSON",
             ErrorDp::OperacionDesconocida(_) => "E_OPERACION_DESCONOCIDA",
             ErrorDp::ColumnaFaltante(_) => "E_COLUMNA_FALTANTE",
+            ErrorDp::LimiteDeClaves { .. } => "E_LIMITE_DE_CLAVES",
         }
     }
 
@@ -52,9 +60,39 @@ impl ErrorDp {
             ErrorDp::NoPudeAbrir { .. }
             | ErrorDp::CsvInvalido(_)
             | ErrorDp::OperacionDesconocida(_)
-            | ErrorDp::ColumnaFaltante(_) => true,
+            | ErrorDp::ColumnaFaltante(_)
+            // Excede el límite del plan: reintentar daría el mismo resultado.
+            | ErrorDp::LimiteDeClaves { .. } => true,
             ErrorDp::Escritura(_) | ErrorDp::JsonInvalido(_) => false,
         }
+    }
+
+    /// Un error del cliente no se debe reintentar: el resultado sería el mismo.
+    /// Uno interno sí, porque puede ser un fallo transitorio de disco o red.
+    pub fn es_reintentable(&self) -> bool {
+        !self.es_culpa_del_cliente()
+    }
+
+    /// Código de salida del proceso, que es lo ÚNICO que un orquestador de
+    /// contenedores puede leer sin interpretar texto.
+    ///
+    /// Convención del motor:
+    ///   0 = todo bien
+    ///   1 = fallo interno, reintentar el job
+    ///   2 = datos del cliente inválidos, marcar FAILED y no reintentar
+    pub fn codigo_salida(&self) -> i32 {
+        if self.es_culpa_del_cliente() { 2 } else { 1 }
+    }
+
+    /// La cadena de causas aplanada a texto, de la más externa a la más interna.
+    pub fn cadena_de_causas(&self) -> Vec<String> {
+        let mut causas = Vec::new();
+        let mut actual = std::error::Error::source(self);
+        while let Some(error) = actual {
+            causas.push(error.to_string());
+            actual = error.source();
+        }
+        causas
     }
 }
 

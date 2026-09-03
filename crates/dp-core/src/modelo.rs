@@ -1,27 +1,11 @@
-use serde::{Deserialize, Serialize};
+//! Los tipos de datos del motor.
+//!
+//! Aquí ya no hay `ClienteBruto` ni `ClienteLimpio`. Existían cuando el motor
+//! solo sabía procesar clientes; ahora las filas se leen por nombre de columna
+//! (ver `fila.rs`), así que el esquema lo pone el archivo del cliente y no
+//! nuestro código.
 
-/// Cómo viene cada fila del CSV de entrada.
-///
-/// Los campos también llevan `pub`: hacer pública la struct no hace públicos
-/// sus campos. Son dos permisos separados.
-#[derive(Debug, Deserialize)]
-pub struct ClienteBruto {
-    pub nombre: String,
-    pub email: String,
-    pub telefono: String,
-    pub ciudad: String,
-}
-
-/// Cómo sale cada fila ya procesada.
-#[derive(Debug, Serialize)]
-pub struct ClienteLimpio {
-    pub nombre: String,
-    pub email: String,
-    pub telefono: Option<String>,
-    pub ciudad: String,
-    pub email_estado: String,
-    pub telefono_valido: bool,
-}
+use serde::Serialize;
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum EstadoEmail {
@@ -33,7 +17,10 @@ pub enum EstadoEmail {
 }
 
 impl EstadoEmail {
-    pub fn etiqueta(&self) -> &str {
+    /// `&'static str` y no `&str`: el texto está incrustado en el binario y
+    /// vive todo el programa, así que la referencia no queda atada a `&self`.
+    /// Eso permite usarla después de que el préstamo de self haya terminado.
+    pub fn etiqueta(&self) -> &'static str {
         match self {
             EstadoEmail::Valido => "ok",
             EstadoEmail::Vacio => "vacio",

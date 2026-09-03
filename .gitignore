@@ -4,3 +4,8 @@
 data/clientes_grande.csv
 data/*_salida.csv
 data/*.json
+
+# Salidas de la CLI. Los CSV de entrada versionados son clientes.csv y
+# sin_columna.csv; todo lo demas lo genera un job.
+data/salida.csv
+data/otra_clave.csv
