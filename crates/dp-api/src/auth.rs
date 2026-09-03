@@ -41,10 +41,7 @@ impl AutenticadorFijo {
     pub fn nuevo(token: impl Into<String>, organizacion: IdOrganizacion, plan: Plan) -> Self {
         AutenticadorFijo {
             token: token.into(),
-            identidad: Identidad {
-                organizacion,
-                plan,
-            },
+            identidad: Identidad { organizacion, plan },
         }
     }
 

@@ -9,3 +9,6 @@ data/*.json
 # sin_columna.csv; todo lo demas lo genera un job.
 data/salida.csv
 data/otra_clave.csv
+
+# Objetos del almacén local y estado de desarrollo.
+data/almacen/

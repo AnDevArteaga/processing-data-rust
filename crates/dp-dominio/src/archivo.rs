@@ -49,7 +49,7 @@ impl TipoArchivo {
         match texto {
             None => TipoArchivo::Desconocido,
             Some(texto) if texto.starts_with('{') || texto.starts_with('[') => TipoArchivo::Json,
-            Some(texto) if texto.is_empty() => TipoArchivo::Desconocido,
+            Some("") => TipoArchivo::Desconocido,
             // Una sola línea sin separadores no es un CSV utilizable: le
             // faltaría el encabezado que nuestras operaciones necesitan.
             Some(texto) if texto.contains(',') || texto.contains(';') => TipoArchivo::Csv,
@@ -150,6 +150,11 @@ impl Archivo {
     pub fn ha_vencido(&self, ahora: DateTime<Utc>) -> bool {
         ahora >= self.vence_en
     }
+
+    /// Marca el archivo como vencido después de borrar sus bytes.
+    pub fn vencer(&mut self) {
+        self.estado = EstadoArchivo::Vencido;
+    }
 }
 
 /// Deja el nombre en algo seguro de mostrar y de registrar en logs.
@@ -157,11 +162,7 @@ impl Archivo {
 /// Quita cualquier componente de ruta y los caracteres de control, que
 /// permitirían falsificar líneas de log o romper una terminal.
 fn nombre_para_mostrar(bruto: &str) -> String {
-    let solo_nombre = bruto
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or("archivo")
-        .trim();
+    let solo_nombre = bruto.rsplit(['/', '\\']).next().unwrap_or("archivo").trim();
 
     let limpio: String = solo_nombre
         .chars()
@@ -282,5 +283,16 @@ mod tests {
         assert!(!archivo.ha_vencido(ahora));
         assert!(!archivo.ha_vencido(ahora + Duration::hours(RETENCION_HORAS - 1)));
         assert!(archivo.ha_vencido(ahora + Duration::hours(RETENCION_HORAS)));
+    }
+
+    #[test]
+    fn vencer_cambia_el_estado_y_deja_de_estar_disponible() {
+        let org = IdOrganizacion::nuevo();
+        let mut archivo = Archivo::pendiente(org, "x.csv", Utc::now());
+        archivo.confirmar(10, TipoArchivo::Csv, "abc".to_string());
+        archivo.vencer();
+
+        assert_eq!(archivo.estado, EstadoArchivo::Vencido);
+        assert!(!archivo.esta_disponible());
     }
 }

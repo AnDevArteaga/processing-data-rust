@@ -16,7 +16,9 @@ use crate::error::{ErrorDp, Resultado};
 use std::fs::File;
 use std::io::{BufWriter, Write};
 
-pub trait Sumidero {
+/// `Send` porque el worker ejecuta el motor en `spawn_blocking`: el sumidero
+/// cruza de un hilo del runtime a un hilo de la reserva bloqueante.
+pub trait Sumidero: Send {
     /// Se llama una sola vez, antes de la primera fila.
     fn encabezado(&mut self, columnas: &[String]) -> Resultado<()>;
 

@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 description = "Worker que reclama jobs de la cola y ejecuta el motor"
 
+[lib]
+name = "dp_worker"
+path = "src/lib.rs"
+
 [[bin]]
 name = "dp-worker"
 path = "src/main.rs"
@@ -11,9 +15,14 @@ path = "src/main.rs"
 [dependencies]
 dp-core = { path = "../dp-core" }
 dp-dominio = { path = "../dp-dominio" }
-dp-memoria = { path = "../dp-memoria" }
 
 chrono.workspace = true
+hex.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+[dev-dependencies]
+dp-memoria = { path = "../dp-memoria" }

@@ -28,7 +28,7 @@ pub mod opciones;
 pub mod plan;
 pub mod puertos;
 
-pub use archivo::{Archivo, EstadoArchivo, TipoArchivo};
+pub use archivo::{Archivo, EstadoArchivo, RETENCION_HORAS, TipoArchivo};
 pub use creditos::{creditos_estimados, creditos_reales};
 pub use error::{ErrorAlmacen, ErrorRepositorio, TransicionInvalida};
 pub use ids::{ErrorId, IdApiKey, IdArchivo, IdJob, IdOrganizacion};

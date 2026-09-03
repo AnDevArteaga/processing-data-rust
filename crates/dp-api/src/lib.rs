@@ -88,3 +88,15 @@ pub async fn montar(config: &Config) -> Result<Arc<Estado>, ErrorApi> {
         base_publica: config.base_publica.clone(),
     }))
 }
+
+/// El worker embebe los mismos puertos que la API. Así reclama los jobs
+/// que esta instancia acaba de encolar, sin otra cola de por medio.
+pub fn contexto_del_worker(estado: &Estado) -> dp_worker::Contexto {
+    dp_worker::Contexto::nuevo(
+        dp_worker::id_de_este_proceso(),
+        estado.jobs.clone(),
+        estado.archivos.clone(),
+        estado.almacen.clone(),
+        estado.reloj.clone(),
+    )
+}

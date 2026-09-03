@@ -146,7 +146,8 @@ mod tests {
 
     #[test]
     fn el_contrato_json_usa_los_nombres_del_pdf() {
-        let json = r#"{"remove_duplicates": true, "dedup_keys": ["email"], "output_format": "json"}"#;
+        let json =
+            r#"{"remove_duplicates": true, "dedup_keys": ["email"], "output_format": "json"}"#;
         let opciones: OpcionesJob = serde_json::from_str(json).unwrap();
 
         assert_eq!(opciones.deduplicar, Some(true));

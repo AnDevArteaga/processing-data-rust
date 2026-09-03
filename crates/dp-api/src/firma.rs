@@ -78,10 +78,7 @@ impl Firmante {
     /// Firma una acción sobre un recurso. Devuelve la firma y el vencimiento.
     pub fn firmar(&self, accion: Accion, recurso: &str, ahora: DateTime<Utc>) -> (String, i64) {
         let expira = (ahora + Duration::minutes(VIGENCIA_MINUTOS)).timestamp();
-        (
-            hex::encode(self.etiqueta(accion, recurso, expira)),
-            expira,
-        )
+        (hex::encode(self.etiqueta(accion, recurso, expira)), expira)
     }
 
     pub fn verificar(

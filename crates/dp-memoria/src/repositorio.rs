@@ -130,7 +130,7 @@ impl RepositorioJobs for RepositorioEnMemoria {
                 .collect();
 
             // Más reciente primero, que es lo que espera un listado de jobs.
-            encontrados.sort_by(|a, b| b.creado_en.cmp(&a.creado_en));
+            encontrados.sort_by_key(|a| std::cmp::Reverse(a.creado_en));
             encontrados.truncate(limite);
             encontrados
         }))
@@ -517,7 +517,10 @@ mod tests {
             .unwrap();
         RepositorioJobs::guardar(&repo, job).await.unwrap();
 
-        let fallidos = repo.listar(org, Some(EstadoJob::Fallido), 10).await.unwrap();
+        let fallidos = repo
+            .listar(org, Some(EstadoJob::Fallido), 10)
+            .await
+            .unwrap();
         assert_eq!(fallidos.len(), 1);
     }
 

@@ -232,10 +232,8 @@ mod tests {
     async fn subir_un_archivo_local_lo_copia_al_almacen() {
         let (almacen, raiz) = almacen_temporal("subir").await;
 
-        let temporal = std::env::temp_dir().join(format!(
-            "dp-origen-{}.csv",
-            uuid_simple_de_prueba("origen")
-        ));
+        let temporal =
+            std::env::temp_dir().join(format!("dp-origen-{}.csv", uuid_simple_de_prueba("origen")));
         tokio::fs::write(&temporal, b"salida,limpia").await.unwrap();
 
         almacen.subir("objetos/salida", &temporal).await.unwrap();

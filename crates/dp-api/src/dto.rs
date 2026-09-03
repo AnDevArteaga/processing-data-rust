@@ -198,8 +198,12 @@ mod tests {
     #[test]
     fn la_respuesta_no_expone_datos_internos_de_la_cola() {
         let mut job = job_de_prueba();
-        job.reclamar("worker-secreto-01", Utc::now(), chrono::Duration::seconds(60))
-            .unwrap();
+        job.reclamar(
+            "worker-secreto-01",
+            Utc::now(),
+            chrono::Duration::seconds(60),
+        )
+        .unwrap();
 
         let json = serde_json::to_string(&RespuestaJob::from(&job)).unwrap();
 

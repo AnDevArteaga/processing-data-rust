@@ -23,7 +23,8 @@ pub use limpiar::LimpiarCsv;
 
 /// La interfaz de operación que pide el PDF: cada procesador (CSV hoy, PDF y
 /// OCR mañana) implementa este trait y el motor ignora los detalles.
-pub trait Operacion {
+/// `Send` porque el worker mueve la operación a `spawn_blocking`.
+pub trait Operacion: Send {
     /// El identificador que viaja en el payload de la API:
     /// `POST /v1/jobs {"operation": "csv.clean"}`
     fn nombre(&self) -> &'static str;

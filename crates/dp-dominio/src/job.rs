@@ -502,7 +502,8 @@ mod tests {
         let mut job = job_de_prueba();
         let ahora = Utc::now();
 
-        job.reclamar("worker-1", ahora, Duration::seconds(1)).unwrap();
+        job.reclamar("worker-1", ahora, Duration::seconds(1))
+            .unwrap();
         job.completar(None, Resumen::default(), 1, ahora).unwrap();
 
         assert!(job.rescatar(ahora + Duration::hours(1)).is_none());

@@ -22,7 +22,10 @@ impl RelojFijo {
     }
 
     pub fn adelantar(&self, cuanto: Duration) {
-        let mut guardia = self.ahora.lock().expect("el mutex del reloj no se envenena");
+        let mut guardia = self
+            .ahora
+            .lock()
+            .expect("el mutex del reloj no se envenena");
         *guardia += cuanto;
     }
 }
@@ -35,7 +38,10 @@ impl Default for RelojFijo {
 
 impl Reloj for RelojFijo {
     fn ahora(&self) -> DateTime<Utc> {
-        *self.ahora.lock().expect("el mutex del reloj no se envenena")
+        *self
+            .ahora
+            .lock()
+            .expect("el mutex del reloj no se envenena")
     }
 }
 
