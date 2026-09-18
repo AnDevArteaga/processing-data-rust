@@ -28,6 +28,9 @@ pub enum ErrorRepositorio {
 
     #[error("fallo del almacenamiento de datos: {0}")]
     Interno(String),
+
+    #[error("saldo insuficiente: hay {disponible} creditos y el job pide {pedido}")]
+    SaldoInsuficiente { disponible: u64, pedido: u64 },
 }
 
 impl ErrorRepositorio {

@@ -47,6 +47,12 @@ pub enum ErrorApi {
     #[error("ya tienes {en_vuelo} jobs sin terminar y tu plan permite {limite}")]
     DemasiadosJobs { en_vuelo: usize, limite: usize },
 
+    #[error("saldo insuficiente: hay {disponible} creditos y el job pide {pedido}")]
+    SaldoInsuficiente { disponible: u64, pedido: u64 },
+
+    #[error("no existe la api key '{0}'")]
+    ClaveNoEncontrada(dp_dominio::IdApiKey),
+
     #[error("la firma de la URL no es valida")]
     FirmaInvalida,
 
@@ -78,6 +84,9 @@ impl From<ErrorRepositorio> for ErrorApi {
     fn from(error: ErrorRepositorio) -> Self {
         match error {
             ErrorRepositorio::Transicion(t) => ErrorApi::Transicion(t),
+            ErrorRepositorio::SaldoInsuficiente { disponible, pedido } => {
+                ErrorApi::SaldoInsuficiente { disponible, pedido }
+            }
             otro => ErrorApi::Repositorio(otro),
         }
     }
@@ -99,6 +108,8 @@ impl ErrorApi {
             ErrorApi::TipoNoSoportado { .. } => "E_TIPO_NO_SOPORTADO",
             ErrorApi::ArchivoDemasiadoGrande { .. } => "E_ARCHIVO_DEMASIADO_GRANDE",
             ErrorApi::DemasiadosJobs { .. } => "E_DEMASIADOS_JOBS",
+            ErrorApi::SaldoInsuficiente { .. } => "E_SALDO_INSUFICIENTE",
+            ErrorApi::ClaveNoEncontrada(_) => "E_API_KEY_NO_ENCONTRADA",
             ErrorApi::FirmaInvalida => "E_FIRMA_INVALIDA",
             ErrorApi::FirmaVencida => "E_FIRMA_VENCIDA",
             ErrorApi::Peticion(_) => "E_PETICION_INVALIDA",
@@ -127,6 +138,8 @@ impl ErrorApi {
             // 429 con la semántica de "estás usando más de lo que tu plan
             // permite": el cliente debe esperar a que terminen sus jobs.
             ErrorApi::DemasiadosJobs { .. } => StatusCode::TOO_MANY_REQUESTS,
+            ErrorApi::SaldoInsuficiente { .. } => StatusCode::PAYMENT_REQUIRED,
+            ErrorApi::ClaveNoEncontrada(_) => StatusCode::NOT_FOUND,
 
             ErrorApi::OperacionDesconocida(_) | ErrorApi::Peticion(_) => StatusCode::BAD_REQUEST,
 

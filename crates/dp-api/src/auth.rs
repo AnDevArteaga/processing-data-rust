@@ -1,17 +1,15 @@
 //! Autenticación.
 //!
-//! Las API keys con hash, scopes y revocación son la fase 3. Lo que se
-//! construye hoy es la **costura**: un trait `Autenticador` y un extractor de
-//! Axum que produce una `Identidad`. Todo manejador de ruta pide `Identidad`
-//! como argumento, y ahí está el valor real: si un endpoint olvida pedirla, no
-//! tiene de dónde sacar la organización, así que no compila. La autenticación
-//! deja de ser algo que hay que acordarse de comprobar.
+//! Un extractor de Axum produce una `Identidad`. Todo manejador de ruta la
+//! pide como argumento: si un endpoint olvida pedirla, no tiene de dónde sacar
+//! la organización, así que no compila.
 
 use crate::error::ErrorApi;
 use crate::estado::Estado;
+use async_trait::async_trait;
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
-use dp_dominio::{IdOrganizacion, Plan};
+use dp_dominio::{IdOrganizacion, Plan, RepositorioCuentas, huella_de_token};
 use std::sync::Arc;
 
 /// Quién está haciendo la petición y con qué plan.
@@ -21,17 +19,14 @@ pub struct Identidad {
     pub plan: Plan,
 }
 
+#[async_trait]
 pub trait Autenticador: Send + Sync {
     /// `None` significa credencial desconocida. No distinguimos "no existe" de
     /// "revocada" a propósito: no hay que ayudar a enumerar credenciales.
-    fn resolver(&self, token: &str) -> Option<Identidad>;
+    async fn resolver(&self, token: &str) -> Option<Identidad>;
 }
 
-/// Un único token válido, leído de la configuración.
-///
-/// Sirve para desarrollo y para los tests. En la fase 3 lo reemplaza un
-/// autenticador que busca el hash Argon2 del token en la tabla `api_keys`, sin
-/// que cambie nada de lo que está construido encima.
+/// Un único token válido. Sirve para tests y para `DP_MEMORIA=1`.
 pub struct AutenticadorFijo {
     token: String,
     identidad: Identidad,
@@ -50,8 +45,9 @@ impl AutenticadorFijo {
     }
 }
 
+#[async_trait]
 impl Autenticador for AutenticadorFijo {
-    fn resolver(&self, token: &str) -> Option<Identidad> {
+    async fn resolver(&self, token: &str) -> Option<Identidad> {
         // Comparación de tiempo constante, igual que con las firmas: el token
         // es una credencial y compararlo con `==` filtra información por
         // tiempo. `ct_eq` no existe en la librería estándar, así que sumamos
@@ -99,7 +95,38 @@ impl FromRequestParts<Arc<Estado>> for Identidad {
         estado
             .autenticador
             .resolver(token)
+            .await
             .ok_or(ErrorApi::NoAutorizado)
+    }
+}
+
+/// Resuelve tokens contra el repositorio de cuentas.
+pub struct AutenticadorCuentas {
+    cuentas: Arc<dyn RepositorioCuentas>,
+}
+
+impl AutenticadorCuentas {
+    pub fn nuevo(cuentas: Arc<dyn RepositorioCuentas>) -> Self {
+        AutenticadorCuentas { cuentas }
+    }
+}
+
+#[async_trait]
+impl Autenticador for AutenticadorCuentas {
+    async fn resolver(&self, token: &str) -> Option<Identidad> {
+        let (org, clave) = self
+            .cuentas
+            .por_hash(&huella_de_token(token))
+            .await
+            .ok()??;
+        let _ = self
+            .cuentas
+            .marcar_uso_api_key(clave.id, chrono::Utc::now())
+            .await;
+        Some(Identidad {
+            organizacion: org.id,
+            plan: org.plan,
+        })
     }
 }
 
@@ -111,20 +138,22 @@ mod tests {
         AutenticadorFijo::nuevo("dp_dev_secreto", IdOrganizacion::nuevo(), Plan::Pro)
     }
 
-    #[test]
-    fn el_token_correcto_resuelve_la_identidad() {
+    #[tokio::test]
+    async fn el_token_correcto_resuelve_la_identidad() {
         let a = autenticador();
-        let identidad = a.resolver("dp_dev_secreto").expect("deberia resolver");
+        let identidad = a
+            .resolver("dp_dev_secreto")
+            .await
+            .expect("deberia resolver");
         assert_eq!(identidad.plan, Plan::Pro);
         assert_eq!(identidad.organizacion, a.identidad().organizacion);
     }
 
-    #[test]
-    fn un_token_equivocado_no_resuelve() {
-        assert!(autenticador().resolver("dp_dev_otro").is_none());
-        assert!(autenticador().resolver("").is_none());
-        // Un prefijo correcto tampoco vale.
-        assert!(autenticador().resolver("dp_dev_secret").is_none());
+    #[tokio::test]
+    async fn un_token_equivocado_no_resuelve() {
+        assert!(autenticador().resolver("dp_dev_otro").await.is_none());
+        assert!(autenticador().resolver("").await.is_none());
+        assert!(autenticador().resolver("dp_dev_secret").await.is_none());
     }
 
     #[test]

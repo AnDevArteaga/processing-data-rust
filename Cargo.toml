@@ -6,6 +6,7 @@ members = [
     "crates/dp-cli",
     "crates/dp-dominio",
     "crates/dp-memoria",
+    "crates/dp-persistencia",
     "crates/dp-api",
     "crates/dp-worker",
 ]
@@ -51,6 +52,9 @@ uuid = { version = "1.26.0", features = ["v4", "serde"] }
 sha2 = "0.11.0"
 hmac = "0.13.0"
 hex = "0.4.3"
+# Runtime queries (sin macros en compile-time) para no exigir DATABASE_URL
+# al desarrollar. SQLite viaja embebido: no hace falta instalar Postgres.
+sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "sqlite", "chrono", "macros"] }
 
 # Perfil de release afinado para procesamiento intensivo.
 [profile.release]

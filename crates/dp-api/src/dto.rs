@@ -168,6 +168,47 @@ pub struct ParametrosFirma {
     pub max: Option<u64>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct RespuestaCuenta {
+    pub organization_id: dp_dominio::IdOrganizacion,
+    pub name: String,
+    pub plan: dp_dominio::Plan,
+    pub credits: u64,
+    pub limits: dp_dominio::Limites,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RespuestaCreditos {
+    pub available: u64,
+    pub monthly_allowance: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PeticionCrearClave {
+    pub name: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RespuestaClaveCreada {
+    pub key_id: dp_dominio::IdApiKey,
+    pub name: String,
+    pub prefix: String,
+    /// Solo aparece en la creación. Después ya no se puede leer.
+    pub token: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RespuestaClave {
+    pub key_id: dp_dominio::IdApiKey,
+    pub name: String,
+    pub prefix: String,
+    pub revoked: bool,
+    pub last_used_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct FiltroJobs {
     #[serde(default)]

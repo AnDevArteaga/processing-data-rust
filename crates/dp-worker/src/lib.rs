@@ -1,16 +1,14 @@
 //! El worker: toma jobs de la cola, corre el motor y liquida el resultado.
 //!
-//! Es una librería y no solo un binario porque en esta fase la cola vive en
-//! memoria. Dos procesos no pueden compartirla. La API embebe este bucle en
-//! el mismo proceso, y los tests llaman a `procesar_siguiente` sin abrir un
-//! puerto. El binario `dp-worker` queda para cuando la cola sea PostgreSQL.
+//! Es una librería y un binario. La API puede embeber el bucle en el mismo
+//! proceso; `dp-worker` abre el mismo SQLite y drena la cola por separado.
 
 use chrono::Duration;
 use dp_core::{ErrorDp, Sumidero, SumideroCsv, SumideroJson, SumideroNulo, buscar_operacion};
 use dp_dominio::{
-    Almacen, Archivo, ErrorAlmacen, ErrorDelJob, ErrorRepositorio, EstadoArchivo, FormatoSalida,
-    IdJob, Job, Reloj, RepositorioArchivos, RepositorioJobs, TipoArchivo, TransicionInvalida,
-    creditos_reales,
+    Almacen, Archivo, ErrorAlmacen, ErrorDelJob, ErrorRepositorio, EstadoArchivo, EstadoJob,
+    FormatoSalida, IdJob, Job, LibroCreditos, Reloj, RepositorioArchivos, RepositorioJobs,
+    TipoArchivo, TransicionInvalida, creditos_reales,
 };
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -47,6 +45,7 @@ pub struct Contexto {
     pub archivos: Arc<dyn RepositorioArchivos>,
     pub almacen: Arc<dyn Almacen>,
     pub reloj: Arc<dyn Reloj>,
+    pub libro: Arc<dyn LibroCreditos>,
     pub intervalo_poll: DuracionStd,
     pub intervalo_rescate: DuracionStd,
     pub intervalo_limpieza: DuracionStd,
@@ -59,6 +58,7 @@ impl Contexto {
         archivos: Arc<dyn RepositorioArchivos>,
         almacen: Arc<dyn Almacen>,
         reloj: Arc<dyn Reloj>,
+        libro: Arc<dyn LibroCreditos>,
     ) -> Self {
         Contexto {
             id: id.into(),
@@ -66,6 +66,7 @@ impl Contexto {
             archivos,
             almacen,
             reloj,
+            libro,
             intervalo_poll: DuracionStd::from_millis(250),
             intervalo_rescate: DuracionStd::from_secs(5),
             intervalo_limpieza: DuracionStd::from_secs(60),
@@ -156,8 +157,30 @@ pub async fn procesar_siguiente(ctx: &Contexto) -> Result<Option<IdJob>, ErrorWo
         tracing::error!(job = %id, %error, "el worker no pudo terminar el job");
     }
 
+    let estado_final = job.estado;
+    let org = job.organizacion;
+    let cobrado = job.creditos_cobrados.unwrap_or(0);
     ctx.jobs.guardar(job).await?;
+    liquidar_creditos(ctx, estado_final, org, id, cobrado).await?;
     Ok(Some(id))
+}
+
+async fn liquidar_creditos(
+    ctx: &Contexto,
+    estado: EstadoJob,
+    org: dp_dominio::IdOrganizacion,
+    job: IdJob,
+    cobrado: u64,
+) -> Result<(), ErrorWorker> {
+    let ahora = ctx.reloj.ahora();
+    match estado {
+        EstadoJob::Completado => ctx.libro.confirmar(org, job, cobrado, ahora).await?,
+        EstadoJob::Fallido | EstadoJob::Cancelado | EstadoJob::SinSalida => {
+            ctx.libro.liberar(org, job, ahora).await?;
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 async fn ejecutar_job(ctx: &Contexto, job: &mut Job) -> Result<(), ErrorWorker> {
@@ -354,7 +377,10 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use dp_core::Resumen;
-    use dp_dominio::{IdOrganizacion, OpcionesJob, Plan, RETENCION_HORAS};
+    use dp_dominio::{
+        IdOrganizacion, LibroCreditos, OpcionesJob, Organizacion, Plan, RETENCION_HORAS,
+        RepositorioCuentas,
+    };
     use dp_memoria::{AlmacenLocal, RelojFijo, RepositorioEnMemoria};
 
     fn ruta_datos(nombre: &str) -> PathBuf {
@@ -374,8 +400,28 @@ mod tests {
         let repo = Arc::new(RepositorioEnMemoria::nuevo());
         let almacen = Arc::new(AlmacenLocal::nuevo(&raiz).await.unwrap());
         let reloj: Arc<dyn Reloj> = Arc::new(RelojFijo::default());
-        let ctx = Contexto::nuevo("worker-test", repo.clone(), repo.clone(), almacen, reloj);
+        let ctx = Contexto::nuevo(
+            "worker-test",
+            repo.clone(),
+            repo.clone(),
+            almacen,
+            reloj,
+            repo.clone(),
+        );
         (ctx, repo, raiz)
+    }
+
+    async fn organizar(repo: &RepositorioEnMemoria, saldo: u64) -> IdOrganizacion {
+        let ahora = Utc::now();
+        let org = Organizacion::nueva("test", Plan::Pro, ahora);
+        let id = org.id;
+        repo.crear_organizacion(org).await.unwrap();
+        if saldo > 0 {
+            repo.acreditar(id, saldo, "asignacion de prueba", ahora)
+                .await
+                .unwrap();
+        }
+        id
     }
 
     async fn encolar_csv(
@@ -393,16 +439,10 @@ mod tests {
         let entrada = archivo.id;
         ctx.archivos.crear(archivo).await.unwrap();
 
-        let job = Job::nuevo(
-            org,
-            operacion,
-            entrada,
-            opciones,
-            limites,
-            5,
-            ctx.reloj.ahora(),
-        );
+        let ahora = ctx.reloj.ahora();
+        let job = Job::nuevo(org, operacion, entrada, opciones, limites, 5, ahora);
         let id = job.id;
+        ctx.libro.reservar(org, id, 5, ahora).await.unwrap();
         ctx.jobs.crear(job).await.unwrap();
         id
     }
@@ -413,8 +453,8 @@ mod tests {
 
     #[tokio::test]
     async fn limpia_el_csv_de_prueba_y_publica_la_salida() {
-        let (ctx, _, raiz) = fixture("clean").await;
-        let org = IdOrganizacion::nuevo();
+        let (ctx, repo, raiz) = fixture("clean").await;
+        let org = organizar(&repo, 1_000).await;
         let id = encolar_csv(
             &ctx,
             org,
@@ -443,6 +483,7 @@ mod tests {
         );
         assert_eq!(job.creditos_cobrados, Some(1));
         assert!(job.salida.is_some());
+        assert_eq!(repo.saldo(org).await.unwrap(), 999);
 
         let salida = ctx
             .archivos
@@ -459,8 +500,8 @@ mod tests {
 
     #[tokio::test]
     async fn un_csv_sin_columna_falla_sin_reintentar() {
-        let (ctx, _, raiz) = fixture("columna").await;
-        let org = IdOrganizacion::nuevo();
+        let (ctx, repo, raiz) = fixture("columna").await;
+        let org = organizar(&repo, 1_000).await;
         let id = encolar_csv(
             &ctx,
             org,
@@ -484,8 +525,8 @@ mod tests {
 
     #[tokio::test]
     async fn inspeccionar_no_publica_archivo() {
-        let (ctx, _, raiz) = fixture("inspect").await;
-        let org = IdOrganizacion::nuevo();
+        let (ctx, repo, raiz) = fixture("inspect").await;
+        let org = organizar(&repo, 1_000).await;
         let id = encolar_csv(
             &ctx,
             org,
@@ -532,6 +573,7 @@ mod tests {
             repo.clone(),
             almacen.clone(),
             reloj.clone(),
+            repo.clone(),
         );
 
         let org = IdOrganizacion::nuevo();

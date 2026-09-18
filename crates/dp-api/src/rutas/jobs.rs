@@ -74,40 +74,47 @@ pub async fn crear(
         });
     }
 
-    // La reserva se calcula con el tamaño real del archivo, ya conocido. El
-    // cobro definitivo lo hace el worker con las filas realmente leídas, así
-    // que esto es un techo y no el precio. El libro mayor de créditos, con
-    // saldo y movimientos, es la fase 3: aquí solo se registra cuánto se
-    // reservó, que es lo que el worker necesita para liquidar.
+    // El cobro definitivo lo hace el worker con las filas realmente leídas:
+    // la reserva es un techo. Sin saldo no se encola.
     let reservados = creditos_estimados(
         &peticion.operation,
         archivo.bytes,
         peticion.options.deduplica(),
     );
 
+    let ahora = estado.reloj.ahora();
     let job = Job::nuevo(
         identidad.organizacion,
         peticion.operation,
         archivo.id,
         peticion.options,
-        // Los límites del plan se congelan dentro del job: el worker los
-        // obedece sin consultar la organización, y bajar de plan no rompe un
-        // job ya aceptado.
         limites,
         reservados,
-        estado.reloj.ahora(),
+        ahora,
     );
 
+    estado
+        .libro
+        .reservar(identidad.organizacion, job.id, reservados, ahora)
+        .await?;
+
     let respuesta = RespuestaJob::from(&job);
+    if let Err(error) = estado.jobs.crear(job).await {
+        let _ = estado
+            .libro
+            .liberar(identidad.organizacion, respuesta.job_id, ahora)
+            .await;
+        return Err(error.into());
+    }
+
     tracing::info!(
-        job = %job.id,
-        operacion = %job.operacion,
+        job = %respuesta.job_id,
+        operacion = %respuesta.operation,
         bytes = archivo.bytes,
         creditos = reservados,
         "job encolado"
     );
 
-    estado.jobs.crear(job).await?;
     Ok((StatusCode::ACCEPTED, Json(respuesta)))
 }
 
@@ -172,6 +179,10 @@ pub async fn cancelar(
             otro => ErrorApi::from(otro),
         })?;
 
+    let _ = estado
+        .libro
+        .liberar(identidad.organizacion, id, estado.reloj.ahora())
+        .await;
     tracing::info!(job = %id, "job cancelado por el cliente");
     Ok(Json(RespuestaJob::from(&job)))
 }

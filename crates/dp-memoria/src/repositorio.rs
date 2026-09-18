@@ -8,8 +8,9 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use dp_dominio::{
-    Archivo, ErrorRepositorio, EstadoJob, IdArchivo, IdJob, IdOrganizacion, Job,
-    RepositorioArchivos, RepositorioJobs,
+    ApiKey, Archivo, ErrorRepositorio, EstadoJob, IdApiKey, IdArchivo, IdJob, IdOrganizacion, Job,
+    LibroCreditos, Movimiento, Organizacion, RepositorioArchivos, RepositorioCuentas,
+    RepositorioJobs, TipoMovimiento,
 };
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -18,6 +19,12 @@ use std::sync::Mutex;
 struct Datos {
     archivos: HashMap<IdArchivo, Archivo>,
     jobs: HashMap<IdJob, Job>,
+    organizaciones: HashMap<IdOrganizacion, Organizacion>,
+    api_keys: HashMap<IdApiKey, ApiKey>,
+    hash_a_key: HashMap<String, IdApiKey>,
+    saldo: HashMap<IdOrganizacion, u64>,
+    reservas: HashMap<IdJob, (IdOrganizacion, u64)>,
+    movimientos: Vec<Movimiento>,
 }
 
 #[derive(Default)]
@@ -220,6 +227,221 @@ impl RepositorioJobs for RepositorioEnMemoria {
             }
             rescatados
         }))
+    }
+}
+
+#[async_trait]
+impl RepositorioCuentas for RepositorioEnMemoria {
+    async fn crear_organizacion(&self, organizacion: Organizacion) -> Result<(), ErrorRepositorio> {
+        self.con_datos(|datos| {
+            datos.saldo.entry(organizacion.id).or_insert(0);
+            datos.organizaciones.insert(organizacion.id, organizacion);
+        });
+        Ok(())
+    }
+
+    async fn alguna_organizacion(&self) -> Result<Option<Organizacion>, ErrorRepositorio> {
+        Ok(self.con_datos(|datos| datos.organizaciones.values().next().cloned()))
+    }
+
+    async fn obtener_organizacion(
+        &self,
+        id: IdOrganizacion,
+    ) -> Result<Option<Organizacion>, ErrorRepositorio> {
+        Ok(self.con_datos(|datos| datos.organizaciones.get(&id).cloned()))
+    }
+
+    async fn crear_api_key(&self, clave: ApiKey) -> Result<(), ErrorRepositorio> {
+        self.con_datos(|datos| {
+            datos.hash_a_key.insert(clave.hash.clone(), clave.id);
+            datos.api_keys.insert(clave.id, clave);
+        });
+        Ok(())
+    }
+
+    async fn listar_api_keys(
+        &self,
+        organizacion: IdOrganizacion,
+    ) -> Result<Vec<ApiKey>, ErrorRepositorio> {
+        Ok(self.con_datos(|datos| {
+            let mut claves: Vec<ApiKey> = datos
+                .api_keys
+                .values()
+                .filter(|k| k.organizacion == organizacion)
+                .cloned()
+                .collect();
+            claves.sort_by_key(|k| std::cmp::Reverse(k.creada_en));
+            claves
+        }))
+    }
+
+    async fn revocar_api_key(
+        &self,
+        organizacion: IdOrganizacion,
+        id: IdApiKey,
+    ) -> Result<(), ErrorRepositorio> {
+        self.con_datos(|datos| {
+            let clave = datos
+                .api_keys
+                .get_mut(&id)
+                .filter(|k| k.organizacion == organizacion)
+                .ok_or_else(|| ErrorRepositorio::no_encontrado("api_key", id))?;
+            clave.revocada = true;
+            Ok(())
+        })
+    }
+
+    async fn por_hash(
+        &self,
+        hash: &str,
+    ) -> Result<Option<(Organizacion, ApiKey)>, ErrorRepositorio> {
+        Ok(self.con_datos(|datos| {
+            let id = datos.hash_a_key.get(hash)?;
+            let clave = datos.api_keys.get(id)?;
+            if clave.revocada {
+                return None;
+            }
+            let org = datos.organizaciones.get(&clave.organizacion)?;
+            Some((org.clone(), clave.clone()))
+        }))
+    }
+
+    async fn marcar_uso_api_key(
+        &self,
+        id: IdApiKey,
+        ahora: DateTime<Utc>,
+    ) -> Result<(), ErrorRepositorio> {
+        self.con_datos(|datos| {
+            if let Some(clave) = datos.api_keys.get_mut(&id) {
+                clave.ultimo_uso = Some(ahora);
+            }
+        });
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl LibroCreditos for RepositorioEnMemoria {
+    async fn saldo(&self, organizacion: IdOrganizacion) -> Result<u64, ErrorRepositorio> {
+        Ok(self.con_datos(|datos| *datos.saldo.get(&organizacion).unwrap_or(&0)))
+    }
+
+    async fn movimientos(
+        &self,
+        organizacion: IdOrganizacion,
+        limite: usize,
+    ) -> Result<Vec<Movimiento>, ErrorRepositorio> {
+        Ok(self.con_datos(|datos| {
+            datos
+                .movimientos
+                .iter()
+                .rev()
+                .filter(|m| m.organizacion == organizacion)
+                .take(limite)
+                .cloned()
+                .collect()
+        }))
+    }
+
+    async fn acreditar(
+        &self,
+        organizacion: IdOrganizacion,
+        cantidad: u64,
+        descripcion: &str,
+        ahora: DateTime<Utc>,
+    ) -> Result<u64, ErrorRepositorio> {
+        Ok(self.con_datos(|datos| {
+            let saldo = datos.saldo.entry(organizacion).or_insert(0);
+            *saldo += cantidad;
+            datos.movimientos.push(Movimiento {
+                organizacion,
+                tipo: TipoMovimiento::Acreditacion,
+                cantidad,
+                job: None,
+                descripcion: descripcion.to_string(),
+                creado_en: ahora,
+            });
+            *saldo
+        }))
+    }
+
+    async fn reservar(
+        &self,
+        organizacion: IdOrganizacion,
+        job: IdJob,
+        cantidad: u64,
+        ahora: DateTime<Utc>,
+    ) -> Result<(), ErrorRepositorio> {
+        self.con_datos(|datos| {
+            let disponible = *datos.saldo.get(&organizacion).unwrap_or(&0);
+            if disponible < cantidad {
+                return Err(ErrorRepositorio::SaldoInsuficiente {
+                    disponible,
+                    pedido: cantidad,
+                });
+            }
+            *datos.saldo.get_mut(&organizacion).unwrap() -= cantidad;
+            datos.reservas.insert(job, (organizacion, cantidad));
+            datos.movimientos.push(Movimiento {
+                organizacion,
+                tipo: TipoMovimiento::Reserva,
+                cantidad,
+                job: Some(job),
+                descripcion: format!("reserva para {job}"),
+                creado_en: ahora,
+            });
+            Ok(())
+        })
+    }
+
+    async fn confirmar(
+        &self,
+        organizacion: IdOrganizacion,
+        job: IdJob,
+        cobrado: u64,
+        ahora: DateTime<Utc>,
+    ) -> Result<(), ErrorRepositorio> {
+        self.con_datos(|datos| {
+            let Some((_, reservado)) = datos.reservas.remove(&job) else {
+                return Ok(());
+            };
+            let devolver = reservado.saturating_sub(cobrado);
+            if devolver > 0 {
+                *datos.saldo.entry(organizacion).or_insert(0) += devolver;
+            }
+            datos.movimientos.push(Movimiento {
+                organizacion,
+                tipo: TipoMovimiento::Cobro,
+                cantidad: cobrado.min(reservado),
+                job: Some(job),
+                descripcion: format!("cobro de {job}"),
+                creado_en: ahora,
+            });
+            Ok(())
+        })
+    }
+
+    async fn liberar(
+        &self,
+        organizacion: IdOrganizacion,
+        job: IdJob,
+        ahora: DateTime<Utc>,
+    ) -> Result<(), ErrorRepositorio> {
+        self.con_datos(|datos| {
+            let Some((_, reservado)) = datos.reservas.remove(&job) else {
+                return Ok(());
+            };
+            *datos.saldo.entry(organizacion).or_insert(0) += reservado;
+            datos.movimientos.push(Movimiento {
+                organizacion,
+                tipo: TipoMovimiento::Liberacion,
+                cantidad: reservado,
+                job: Some(job),
+                descripcion: format!("liberacion de {job}"),
+                creado_en: ahora,
+            });
+            Ok(())
+        })
     }
 }
 
@@ -563,5 +785,57 @@ mod tests {
         let vencidos = RepositorioArchivos::vencidos(&repo, ahora).await.unwrap();
         assert_eq!(vencidos.len(), 1);
         assert_eq!(vencidos[0].nombre_original, "viejo.csv");
+    }
+
+    #[tokio::test]
+    async fn el_libro_reserva_cobra_y_libera() {
+        let repo = RepositorioEnMemoria::nuevo();
+        let ahora = Utc::now();
+        let org = Organizacion::nueva("acme", dp_dominio::Plan::Pro, ahora);
+        let id = org.id;
+        repo.crear_organizacion(org).await.unwrap();
+        assert_eq!(repo.acreditar(id, 10, "carga", ahora).await.unwrap(), 10);
+
+        let job = IdJob::nuevo();
+        repo.reservar(id, job, 4, ahora).await.unwrap();
+        assert_eq!(repo.saldo(id).await.unwrap(), 6);
+
+        repo.confirmar(id, job, 1, ahora).await.unwrap();
+        assert_eq!(repo.saldo(id).await.unwrap(), 9);
+
+        let job2 = IdJob::nuevo();
+        repo.reservar(id, job2, 3, ahora).await.unwrap();
+        repo.liberar(id, job2, ahora).await.unwrap();
+        assert_eq!(repo.saldo(id).await.unwrap(), 9);
+
+        let error = repo
+            .reservar(id, IdJob::nuevo(), 100, ahora)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            ErrorRepositorio::SaldoInsuficiente {
+                disponible: 9,
+                pedido: 100
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn una_api_key_revocada_no_resuelve() {
+        let repo = RepositorioEnMemoria::nuevo();
+        let ahora = Utc::now();
+        let org = Organizacion::nueva("acme", dp_dominio::Plan::Pro, ahora);
+        let id = org.id;
+        repo.crear_organizacion(org).await.unwrap();
+        let (clave, token) = ApiKey::emitir(id, "prod", ahora);
+        let hash = clave.hash.clone();
+        let key_id = clave.id;
+        repo.crear_api_key(clave).await.unwrap();
+
+        assert!(repo.por_hash(&hash).await.unwrap().is_some());
+        repo.revocar_api_key(id, key_id).await.unwrap();
+        assert!(repo.por_hash(&hash).await.unwrap().is_none());
+        let _ = token;
     }
 }

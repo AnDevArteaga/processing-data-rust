@@ -13,7 +13,7 @@
 //!          ├──> dp-dominio ──> dp-core
 //! dp-worker┘         ▲
 //!                    │
-//!              dp-memoria (implementa los puertos)
+//!      dp-memoria / dp-persistencia (implementan los puertos)
 //! ```
 //!
 //! Todas las flechas apuntan hacia adentro. Si algún día alguien escribe
@@ -21,6 +21,7 @@
 
 pub mod archivo;
 pub mod creditos;
+pub mod cuenta;
 pub mod error;
 pub mod ids;
 pub mod job;
@@ -29,10 +30,14 @@ pub mod plan;
 pub mod puertos;
 
 pub use archivo::{Archivo, EstadoArchivo, RETENCION_HORAS, TipoArchivo};
-pub use creditos::{creditos_estimados, creditos_reales};
+pub use creditos::{Movimiento, TipoMovimiento, creditos_estimados, creditos_reales};
+pub use cuenta::{ApiKey, Organizacion, huella_de_token};
 pub use error::{ErrorAlmacen, ErrorRepositorio, TransicionInvalida};
 pub use ids::{ErrorId, IdApiKey, IdArchivo, IdJob, IdOrganizacion};
 pub use job::{Desenlace, ErrorDelJob, EstadoJob, Job};
 pub use opciones::{FormatoSalida, OpcionesJob};
 pub use plan::{Limites, Plan};
-pub use puertos::{Almacen, Reloj, RelojDelSistema, RepositorioArchivos, RepositorioJobs};
+pub use puertos::{
+    Almacen, LibroCreditos, Reloj, RelojDelSistema, RepositorioArchivos, RepositorioCuentas,
+    RepositorioJobs,
+};

@@ -1,9 +1,4 @@
 //! La API v1.
-//!
-//! Es una librería y no solo un binario a propósito: así los tests de
-//! integración construyen el enrutador completo, con repositorio en memoria y
-//! almacén temporal, y le mandan peticiones sin abrir un puerto ni levantar
-//! una base de datos. La suite entera corre en milisegundos.
 
 pub mod auth;
 pub mod dto;
@@ -16,24 +11,23 @@ pub use error::ErrorApi;
 pub use estado::Estado;
 pub use rutas::enrutador;
 
-use auth::AutenticadorFijo;
-use dp_dominio::{Plan, RelojDelSistema};
+use auth::{AutenticadorCuentas, AutenticadorFijo};
+use dp_dominio::{ApiKey, LibroCreditos, Organizacion, Plan, RelojDelSistema, RepositorioCuentas};
 use dp_memoria::{AlmacenLocal, RepositorioEnMemoria};
+use dp_persistencia::RepositorioSqlite;
 use firma::Firmante;
 use std::sync::Arc;
 
-/// La configuración del proceso, leída del entorno.
-///
-/// Las variables se leen UNA vez al arrancar y no en cada petición: un
-/// servidor que decide su comportamiento leyendo el entorno a mitad de vuelo
-/// es imposible de razonar.
 pub struct Config {
     pub direccion: String,
     pub base_publica: String,
     pub directorio_almacen: String,
+    pub base_datos: String,
     pub secreto_firma: String,
     pub token_dev: String,
     pub plan_dev: Plan,
+    /// Si es true, no toca disco: sirve para tests. En producción es false.
+    pub en_memoria: bool,
 }
 
 impl Config {
@@ -41,13 +35,13 @@ impl Config {
         let puerto = variable("DP_PUERTO", "8080");
         Config {
             direccion: format!("0.0.0.0:{puerto}"),
-            // Detrás de un proxy inverso la base pública no es la dirección
-            // donde escuchamos, así que es una variable aparte.
             base_publica: variable("DP_BASE_PUBLICA", &format!("http://localhost:{puerto}")),
             directorio_almacen: variable("DP_ALMACEN", "data/almacen"),
+            base_datos: variable("DP_DATABASE", "data/plataforma.sqlite"),
             secreto_firma: variable("DP_SECRETO_FIRMA", "secreto-de-desarrollo-cambiame"),
             token_dev: variable("DP_TOKEN", "dp_dev_token"),
             plan_dev: Plan::Pro,
+            en_memoria: std::env::var("DP_MEMORIA").ok().as_deref() == Some("1"),
         }
     }
 }
@@ -56,41 +50,100 @@ fn variable(nombre: &str, por_defecto: &str) -> String {
     std::env::var(nombre).unwrap_or_else(|_| por_defecto.to_string())
 }
 
-/// Monta el estado completo con las implementaciones de la fase 1.
-///
-/// Esta función es el único sitio donde se decide qué implementación de cada
-/// puerto se usa. En la fase 2, cambiar `RepositorioEnMemoria` por
-/// `RepositorioPostgres` es una línea aquí y nada más.
 pub async fn montar(config: &Config) -> Result<Arc<Estado>, ErrorApi> {
-    let repositorio = Arc::new(RepositorioEnMemoria::nuevo());
     let almacen = Arc::new(AlmacenLocal::nuevo(&config.directorio_almacen).await?);
-    let organizacion = dp_dominio::IdOrganizacion::nuevo();
+    let reloj = Arc::new(RelojDelSistema);
+    let firmante = Arc::new(Firmante::nuevo(&config.secreto_firma));
 
-    tracing::info!(
-        organizacion = %organizacion,
-        plan = config.plan_dev.etiqueta(),
-        "organizacion de desarrollo creada"
-    );
+    if config.en_memoria {
+        return montar_memoria(config, almacen, reloj, firmante).await;
+    }
+
+    let repo = Arc::new(RepositorioSqlite::abrir(&config.base_datos).await?);
+    let semilla = sembrar_si_vacio(repo.as_ref(), config).await?;
+
+    if let Some((org, token)) = &semilla {
+        tracing::info!(organizacion = %org.id, plan = org.plan.etiqueta(), "organizacion inicial creada");
+        tracing::info!(token = %token, "API key inicial (guardala: no se vuelve a mostrar)");
+    }
 
     Ok(Arc::new(Estado {
-        // El mismo objeto sirve como los dos repositorios. `Arc::clone` no
-        // copia nada: solo incrementa un contador.
-        archivos: repositorio.clone(),
-        jobs: repositorio,
+        archivos: repo.clone(),
+        jobs: repo.clone(),
+        cuentas: repo.clone(),
+        libro: repo.clone(),
+        almacen,
+        autenticador: Arc::new(AutenticadorCuentas::nuevo(repo)),
+        reloj,
+        firmante,
+        base_publica: config.base_publica.clone(),
+    }))
+}
+
+async fn montar_memoria(
+    config: &Config,
+    almacen: Arc<AlmacenLocal>,
+    reloj: Arc<RelojDelSistema>,
+    firmante: Arc<Firmante>,
+) -> Result<Arc<Estado>, ErrorApi> {
+    let repo = Arc::new(RepositorioEnMemoria::nuevo());
+    let ahora = chrono::Utc::now();
+    let org = Organizacion::nueva("Desarrollo", config.plan_dev, ahora);
+    let organizacion = org.id;
+    repo.crear_organizacion(org).await?;
+    repo.acreditar(
+        organizacion,
+        config.plan_dev.limites().creditos_mensuales,
+        "asignacion inicial del plan",
+        ahora,
+    )
+    .await?;
+
+    tracing::info!(organizacion = %organizacion, "organizacion de desarrollo en memoria");
+
+    Ok(Arc::new(Estado {
+        archivos: repo.clone(),
+        jobs: repo.clone(),
+        cuentas: repo.clone(),
+        libro: repo.clone(),
         almacen,
         autenticador: Arc::new(AutenticadorFijo::nuevo(
             &config.token_dev,
             organizacion,
             config.plan_dev,
         )),
-        reloj: Arc::new(RelojDelSistema),
-        firmante: Arc::new(Firmante::nuevo(&config.secreto_firma)),
+        reloj,
+        firmante,
         base_publica: config.base_publica.clone(),
     }))
 }
 
-/// El worker embebe los mismos puertos que la API. Así reclama los jobs
-/// que esta instancia acaba de encolar, sin otra cola de por medio.
+async fn sembrar_si_vacio(
+    cuentas: &RepositorioSqlite,
+    config: &Config,
+) -> Result<Option<(Organizacion, String)>, ErrorApi> {
+    // Si ya hay una org, no tocamos nada: un arranque posterior no rota la key.
+    if cuentas.alguna_organizacion().await?.is_some() {
+        return Ok(None);
+    }
+
+    let ahora = chrono::Utc::now();
+    let org = Organizacion::nueva("Desarrollo", config.plan_dev, ahora);
+    let id = org.id;
+    cuentas.crear_organizacion(org.clone()).await?;
+    cuentas
+        .acreditar(
+            id,
+            config.plan_dev.limites().creditos_mensuales,
+            "asignacion inicial del plan",
+            ahora,
+        )
+        .await?;
+    let (clave, token) = ApiKey::emitir(id, "inicial", ahora);
+    cuentas.crear_api_key(clave).await?;
+    Ok(Some((org, token)))
+}
+
 pub fn contexto_del_worker(estado: &Estado) -> dp_worker::Contexto {
     dp_worker::Contexto::nuevo(
         dp_worker::id_de_este_proceso(),
@@ -98,5 +151,6 @@ pub fn contexto_del_worker(estado: &Estado) -> dp_worker::Contexto {
         estado.archivos.clone(),
         estado.almacen.clone(),
         estado.reloj.clone(),
+        estado.libro.clone(),
     )
 }

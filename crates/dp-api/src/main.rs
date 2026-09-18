@@ -24,8 +24,8 @@ async fn main() {
         }
     };
 
-    // El worker corre en este mismo proceso porque la cola es el repositorio
-    // en memoria. `DP_SIN_WORKER=1` lo apaga, por si se quiere solo la API.
+    // El worker corre en este mismo proceso por defecto. `DP_SIN_WORKER=1` lo
+    // apaga para dejar la cola al binario `dp-worker`.
     let (parar_tx, parar_rx) = watch::channel(false);
     if std::env::var("DP_SIN_WORKER").ok().as_deref() != Some("1") {
         let ctx = contexto_del_worker(&estado);
@@ -46,9 +46,13 @@ async fn main() {
         direccion = %config.direccion,
         base_publica = %config.base_publica,
         almacen = %config.directorio_almacen,
+        base_datos = %config.base_datos,
+        en_memoria = config.en_memoria,
         "API escuchando"
     );
-    tracing::info!(token = %config.token_dev, "token de desarrollo");
+    if config.en_memoria {
+        tracing::info!(token = %config.token_dev, "token de desarrollo (modo memoria)");
+    }
 
     // `with_graceful_shutdown` es lo que hace que un despliegue no corte
     // peticiones a mitad: al recibir Ctrl+C deja de aceptar conexiones nuevas

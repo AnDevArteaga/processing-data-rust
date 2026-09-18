@@ -3,11 +3,14 @@
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
-use dp_api::auth::AutenticadorFijo;
+use dp_api::auth::AutenticadorCuentas;
 use dp_api::estado::Estado;
 use dp_api::firma::Firmante;
 use dp_api::{contexto_del_worker, enrutador};
-use dp_dominio::{IdOrganizacion, Plan, RelojDelSistema};
+use dp_dominio::{
+    ApiKey, IdApiKey, IdOrganizacion, LibroCreditos, Organizacion, Plan, RelojDelSistema,
+    RepositorioCuentas, huella_de_token,
+};
 use dp_memoria::{AlmacenLocal, RepositorioEnMemoria};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
@@ -24,6 +27,10 @@ struct App {
 
 impl App {
     async fn nueva(plan: Plan) -> Self {
+        Self::nueva_con_saldo(plan, 1_000_000).await
+    }
+
+    async fn nueva_con_saldo(plan: Plan, saldo: u64) -> Self {
         let raiz = std::env::temp_dir().join(format!(
             "dp-api-flujo-{}",
             std::time::SystemTime::now()
@@ -34,11 +41,39 @@ impl App {
         let repo = Arc::new(RepositorioEnMemoria::nuevo());
         let almacen = Arc::new(AlmacenLocal::nuevo(&raiz).await.unwrap());
         let org = IdOrganizacion::nuevo();
+        let ahora = chrono::Utc::now();
+        repo.crear_organizacion(Organizacion {
+            id: org,
+            nombre: "Prueba".into(),
+            plan,
+            creado_en: ahora,
+        })
+        .await
+        .unwrap();
+        if saldo > 0 {
+            repo.acreditar(org, saldo, "asignacion de prueba", ahora)
+                .await
+                .unwrap();
+        }
+        repo.crear_api_key(ApiKey {
+            id: IdApiKey::nuevo(),
+            organizacion: org,
+            nombre: "fixture".into(),
+            prefijo: TOKEN.chars().take(12).collect(),
+            hash: huella_de_token(TOKEN),
+            revocada: false,
+            ultimo_uso: None,
+            creada_en: ahora,
+        })
+        .await
+        .unwrap();
         let estado = Arc::new(Estado {
             archivos: repo.clone(),
-            jobs: repo,
+            jobs: repo.clone(),
+            cuentas: repo.clone(),
+            libro: repo.clone(),
             almacen,
-            autenticador: Arc::new(AutenticadorFijo::nuevo(TOKEN, org, plan)),
+            autenticador: Arc::new(AutenticadorCuentas::nuevo(repo)),
             reloj: Arc::new(RelojDelSistema),
             firmante: Arc::new(Firmante::nuevo("secreto-de-prueba")),
             base_publica: "http://test".to_string(),
@@ -90,6 +125,14 @@ impl App {
             .body(Body::from(bytes))
             .unwrap();
         self.pedir(req).await
+    }
+
+    async fn delete(&self, ruta: &str, token: Option<&str>) -> (StatusCode, Value) {
+        let mut builder = Request::builder().uri(ruta).method("DELETE");
+        if let Some(t) = token {
+            builder = builder.header(header::AUTHORIZATION, format!("Bearer {t}"));
+        }
+        self.pedir(builder.body(Body::empty()).unwrap()).await
     }
 
     async fn get_bytes(&self, ruta: &str) -> (StatusCode, Vec<u8>) {
@@ -377,4 +420,127 @@ async fn el_listado_solo_muestra_los_jobs_de_esta_organizacion() {
     assert_eq!(estado, StatusCode::OK);
     assert_eq!(cuerpo["count"], 1);
     assert_eq!(cuerpo["data"][0]["status"], "queued");
+}
+
+#[tokio::test]
+async fn la_cuenta_expone_plan_y_saldo() {
+    let app = App::nueva_con_saldo(Plan::Starter, 500).await;
+    let (estado, cuerpo) = app.get("/v1/me", Some(TOKEN)).await;
+    assert_eq!(estado, StatusCode::OK, "{cuerpo}");
+    assert_eq!(cuerpo["plan"], "starter");
+    assert_eq!(cuerpo["credits"], 500);
+    assert_eq!(cuerpo["name"], "Prueba");
+    assert_eq!(cuerpo["limits"]["jobs_en_vuelo"], 3);
+
+    let (estado, cuerpo) = app.get("/v1/credits", Some(TOKEN)).await;
+    assert_eq!(estado, StatusCode::OK);
+    assert_eq!(cuerpo["available"], 500);
+    assert_eq!(cuerpo["monthly_allowance"], 5_000);
+}
+
+#[tokio::test]
+async fn sin_saldo_crear_un_job_responde_402() {
+    let app = App::nueva_con_saldo(Plan::Pro, 0).await;
+    let file_id = subir(&app, "clientes.csv", csv_clientes()).await;
+
+    let (estado, cuerpo) = app
+        .post(
+            "/v1/jobs",
+            Some(TOKEN),
+            json!({ "operation": "csv.inspect", "file_id": file_id }),
+        )
+        .await;
+    assert_eq!(estado, StatusCode::PAYMENT_REQUIRED, "{cuerpo}");
+    assert_eq!(cuerpo["error"]["codigo"], "E_SALDO_INSUFICIENTE");
+}
+
+#[tokio::test]
+async fn al_completar_se_cobra_y_al_fallar_se_libera() {
+    let app = App::nueva_con_saldo(Plan::Pro, 10).await;
+    let file_id = subir(&app, "clientes.csv", csv_clientes()).await;
+
+    let (_, cuerpo) = app
+        .post(
+            "/v1/jobs",
+            Some(TOKEN),
+            json!({ "operation": "csv.inspect", "file_id": file_id }),
+        )
+        .await;
+    let (estado, creditos) = app.get("/v1/credits", Some(TOKEN)).await;
+    assert_eq!(estado, StatusCode::OK);
+    assert_eq!(creditos["available"], 9);
+
+    app.procesar().await;
+    let (estado, creditos) = app.get("/v1/credits", Some(TOKEN)).await;
+    assert_eq!(estado, StatusCode::OK);
+    assert_eq!(creditos["available"], 9);
+    assert_eq!(cuerpo["credits_reserved"], 1);
+
+    let roto = subir(&app, "roto.csv", csv_sin_columna()).await;
+    let (_, _) = app
+        .post(
+            "/v1/jobs",
+            Some(TOKEN),
+            json!({ "operation": "csv.clean", "file_id": roto }),
+        )
+        .await;
+    let (_, creditos) = app.get("/v1/credits", Some(TOKEN)).await;
+    assert_eq!(creditos["available"], 8);
+
+    app.procesar().await;
+    let (_, creditos) = app.get("/v1/credits", Some(TOKEN)).await;
+    assert_eq!(creditos["available"], 9);
+}
+
+#[tokio::test]
+async fn se_pueden_crear_listar_y_revocar_api_keys() {
+    let app = App::nueva(Plan::Pro).await;
+
+    let (estado, cuerpo) = app
+        .post("/v1/api-keys", Some(TOKEN), json!({ "name": "prod" }))
+        .await;
+    assert_eq!(estado, StatusCode::CREATED, "{cuerpo}");
+    let token = cuerpo["token"].as_str().unwrap().to_string();
+    assert!(token.starts_with("dp_"));
+    let key_id = cuerpo["key_id"].as_str().unwrap().to_string();
+
+    let (estado, cuerpo) = app.get("/v1/api-keys", Some(TOKEN)).await;
+    assert_eq!(estado, StatusCode::OK);
+    let claves = cuerpo["data"].as_array().unwrap();
+    assert!(
+        claves
+            .iter()
+            .any(|k| k["name"] == "prod" && k["revoked"] == false),
+        "{cuerpo}"
+    );
+    assert!(claves.iter().all(|k| k["token"].is_null()));
+
+    let (estado, me) = app.get("/v1/me", Some(&token)).await;
+    assert_eq!(estado, StatusCode::OK, "{me}");
+
+    let (estado, _) = app
+        .delete(&format!("/v1/api-keys/{key_id}"), Some(TOKEN))
+        .await;
+    assert_eq!(estado, StatusCode::NO_CONTENT);
+
+    let (estado, cuerpo) = app.get("/v1/api-keys", Some(TOKEN)).await;
+    assert_eq!(estado, StatusCode::OK);
+    let prod = cuerpo["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|k| k["name"] == "prod")
+        .unwrap();
+    assert_eq!(prod["revoked"], true);
+
+    let (estado, _) = app
+        .delete(
+            "/v1/api-keys/key_0123456789abcdef0123456789abcdef",
+            Some(TOKEN),
+        )
+        .await;
+    assert_eq!(estado, StatusCode::NOT_FOUND);
+
+    let (estado, cuerpo) = app.get("/v1/me", Some(&token)).await;
+    assert_eq!(estado, StatusCode::UNAUTHORIZED, "{cuerpo}");
 }

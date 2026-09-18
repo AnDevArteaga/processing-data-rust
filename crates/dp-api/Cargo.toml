@@ -18,7 +18,10 @@ path = "src/main.rs"
 dp-core = { path = "../dp-core" }
 dp-dominio = { path = "../dp-dominio" }
 dp-memoria = { path = "../dp-memoria" }
+dp-persistencia = { path = "../dp-persistencia" }
 dp-worker = { path = "../dp-worker" }
+
+async-trait.workspace = true
 
 axum.workspace = true
 chrono.workspace = true

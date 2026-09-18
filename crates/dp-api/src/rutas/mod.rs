@@ -1,11 +1,12 @@
 //! El enrutador y las rutas que no necesitan estado.
 
 pub mod archivos;
+pub mod cuenta;
 pub mod jobs;
 
 use crate::estado::Estado;
 use axum::Json;
-use axum::routing::{get, post, put};
+use axum::routing::{delete, get, post, put};
 use axum::{Router, response::IntoResponse};
 use dp_core::catalogo;
 use serde_json::json;
@@ -42,6 +43,14 @@ pub fn enrutador(estado: Arc<Estado>) -> Router {
         .route("/v1/jobs", post(jobs::crear).get(jobs::listar))
         .route("/v1/jobs/{id}", get(jobs::detalle))
         .route("/v1/jobs/{id}/cancel", post(jobs::cancelar))
+        .route("/v1/me", get(cuenta::yo))
+        .route("/v1/credits", get(cuenta::creditos))
+        .route("/v1/credits/movements", get(cuenta::movimientos))
+        .route(
+            "/v1/api-keys",
+            post(cuenta::crear_clave).get(cuenta::listar_claves),
+        )
+        .route("/v1/api-keys/{id}", delete(cuenta::revocar_clave))
         .layer(RequestBodyLimitLayer::new(LIMITE_CUERPO))
         // Una traza por petición con su método, ruta y latencia. Es la base de
         // las métricas p50/p95 que pide la sección 12 del PDF.

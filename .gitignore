@@ -12,3 +12,5 @@ data/otra_clave.csv
 
 # Objetos del almacén local y estado de desarrollo.
 data/almacen/
+data/*.sqlite
+data/*.sqlite-*

@@ -1,0 +1,17 @@
+[package]
+name = "dp-persistencia"
+version.workspace = true
+edition.workspace = true
+description = "Repositorio SQLite: cola, cuentas, creditos y archivos"
+
+[dependencies]
+dp-core = { path = "../dp-core" }
+dp-dominio = { path = "../dp-dominio" }
+
+async-trait.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+tracing.workspace = true

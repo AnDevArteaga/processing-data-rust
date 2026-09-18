@@ -15,8 +15,10 @@
 //! irrelevante frente a una consulta a base de datos.
 
 use crate::archivo::Archivo;
+use crate::creditos::Movimiento;
+use crate::cuenta::{ApiKey, Organizacion};
 use crate::error::{ErrorAlmacen, ErrorRepositorio};
-use crate::ids::{IdArchivo, IdJob, IdOrganizacion};
+use crate::ids::{IdApiKey, IdArchivo, IdJob, IdOrganizacion};
 use crate::job::{EstadoJob, Job};
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
@@ -128,6 +130,89 @@ pub trait RepositorioJobs: Send + Sync {
     /// Devuelve a la cola los jobs cuyo worker desapareció.
     /// Devuelve cuántos rescató.
     async fn rescatar_vencidos(&self, ahora: DateTime<Utc>) -> Result<u64, ErrorRepositorio>;
+}
+
+#[async_trait]
+pub trait RepositorioCuentas: Send + Sync {
+    async fn crear_organizacion(&self, organizacion: Organizacion) -> Result<(), ErrorRepositorio>;
+
+    async fn alguna_organizacion(&self) -> Result<Option<Organizacion>, ErrorRepositorio>;
+
+    async fn obtener_organizacion(
+        &self,
+        id: IdOrganizacion,
+    ) -> Result<Option<Organizacion>, ErrorRepositorio>;
+
+    async fn crear_api_key(&self, clave: ApiKey) -> Result<(), ErrorRepositorio>;
+
+    async fn listar_api_keys(
+        &self,
+        organizacion: IdOrganizacion,
+    ) -> Result<Vec<ApiKey>, ErrorRepositorio>;
+
+    async fn revocar_api_key(
+        &self,
+        organizacion: IdOrganizacion,
+        id: IdApiKey,
+    ) -> Result<(), ErrorRepositorio>;
+
+    /// Busca por la huella del token. Una clave revocada se comporta como
+    /// si no existiera.
+    async fn por_hash(
+        &self,
+        hash: &str,
+    ) -> Result<Option<(Organizacion, ApiKey)>, ErrorRepositorio>;
+
+    async fn marcar_uso_api_key(
+        &self,
+        id: IdApiKey,
+        ahora: DateTime<Utc>,
+    ) -> Result<(), ErrorRepositorio>;
+}
+
+/// Libro mayor: el saldo disponible es el único número que autoriza un job.
+#[async_trait]
+pub trait LibroCreditos: Send + Sync {
+    async fn saldo(&self, organizacion: IdOrganizacion) -> Result<u64, ErrorRepositorio>;
+
+    async fn movimientos(
+        &self,
+        organizacion: IdOrganizacion,
+        limite: usize,
+    ) -> Result<Vec<Movimiento>, ErrorRepositorio>;
+
+    async fn acreditar(
+        &self,
+        organizacion: IdOrganizacion,
+        cantidad: u64,
+        descripcion: &str,
+        ahora: DateTime<Utc>,
+    ) -> Result<u64, ErrorRepositorio>;
+
+    async fn reservar(
+        &self,
+        organizacion: IdOrganizacion,
+        job: IdJob,
+        cantidad: u64,
+        ahora: DateTime<Utc>,
+    ) -> Result<(), ErrorRepositorio>;
+
+    /// Idempotente: si el job ya no tiene reserva, no hace nada.
+    async fn confirmar(
+        &self,
+        organizacion: IdOrganizacion,
+        job: IdJob,
+        cobrado: u64,
+        ahora: DateTime<Utc>,
+    ) -> Result<(), ErrorRepositorio>;
+
+    /// Idempotente: devuelve la reserva entera si todavía existe.
+    async fn liberar(
+        &self,
+        organizacion: IdOrganizacion,
+        job: IdJob,
+        ahora: DateTime<Utc>,
+    ) -> Result<(), ErrorRepositorio>;
 }
 
 /// El reloj, como puerto.

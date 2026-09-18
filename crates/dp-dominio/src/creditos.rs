@@ -8,7 +8,29 @@
 // `self::` es la ruta a este mismo módulo. El submódulo de abajo existe solo
 // para agrupar las constantes de precio; el glob las trae a este ámbito.
 use self::modelo_de_costo::*;
+use crate::ids::{IdJob, IdOrganizacion};
+use chrono::{DateTime, Utc};
 use dp_core::Resumen;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TipoMovimiento {
+    Acreditacion,
+    Reserva,
+    Cobro,
+    Liberacion,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Movimiento {
+    pub organizacion: IdOrganizacion,
+    pub tipo: TipoMovimiento,
+    pub cantidad: u64,
+    pub job: Option<IdJob>,
+    pub descripcion: String,
+    pub creado_en: DateTime<Utc>,
+}
 
 /// Constantes de precio, agrupadas para que se vean juntas y se puedan
 /// calibrar sin buscarlas por el archivo.
